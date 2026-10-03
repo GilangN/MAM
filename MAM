@@ -1,3 +1,10 @@
+-- Pengecekan Place ID: Script hanya akan berjalan di map "My Anime Mine"
+local TARGET_PLACE_ID = 79389059854988 
+
+if game.PlaceId ~= TARGET_PLACE_ID then
+    return -- Berhenti mengeksekusi jika dijalankan di luar game ini
+end
+
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local UserInputService = game:GetService("UserInputService")
@@ -5,18 +12,6 @@ local Camera = workspace.CurrentCamera
 
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
-
--- Fitur Auto Execute / Re-execute saat Rejoin / Reconnect
-local queueOnTeleport = syn and syn.queue_on_teleport or queue_on_teleport or fluxus and fluxus.queue_on_teleport
-if queueOnTeleport then
-    pcall(function()
-        queueOnTeleport([[
-            -- Script otomatis berjalan ulang setelah rejoin
-            task.wait(2) -- Jeda sebentar agar game termuat sempurna
-            loadstring(game:HttpGet("https://raw.githubusercontent.com/GilangN/MAM/refs/heads/main/MAM"))()
-        ]])
-    end)
-end
 
 -- Hapus UI lama jika script dieksekusi ulang agar tidak menumpuk
 if playerGui:FindFirstChild("AutoFarmScriptUI") then
