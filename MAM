@@ -1,0 +1,575 @@
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local UserInputService = game:GetService("UserInputService")
+local Camera = workspace.CurrentCamera
+
+local player = Players.LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui")
+
+-- Fitur Auto Execute / Re-execute saat Rejoin / Reconnect
+local queueOnTeleport = syn and syn.queue_on_teleport or queue_on_teleport or fluxus and fluxus.queue_on_teleport
+if queueOnTeleport then
+    pcall(function()
+        queueOnTeleport([[
+            -- Script otomatis berjalan ulang setelah rejoin
+            task.wait(2) -- Jeda sebentar agar game termuat sempurna
+            loadstring(game:HttpGet("https://raw.githubusercontent.com/GilangN/MAM/refs/heads/main/MAM"))()
+        ]])
+    end)
+end
+
+-- Hapus UI lama jika script dieksekusi ulang agar tidak menumpuk
+if playerGui:FindFirstChild("AutoFarmScriptUI") then
+    playerGui.AutoFarmScriptUI:Destroy()
+end
+
+-- Buat ScreenGui utama dengan DisplayOrder tinggi agar selalu di atas UI game
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "AutoFarmScriptUI"
+screenGui.ResetOnSpawn = false
+screenGui.DisplayOrder = 999999
+screenGui.Parent = playerGui
+
+-- Variabel status untuk kontrol loop Auto Claim (Otomatis ON saat execute)
+local autoClaimActive = true
+local autoClaimThread = nil
+
+-- Ambil daftar item secara dinamis dari ReplicatedStorage.Items (Kecualikan Pickaxe)
+local itemSettings = {}
+local itemsFolder = ReplicatedStorage:FindFirstChild("Items")
+
+if itemsFolder then
+    for _, itemObj in ipairs(itemsFolder:GetChildren()) do
+        if not string.lower(itemObj.Name):find("pickaxe") then
+            table.insert(itemSettings, {name = itemObj.Name, enabled = true})
+        end
+    end
+end
+
+if #itemSettings == 0 then
+    local defaultItems = {"Caelite", "Zenithite", "Aurorine", "Gleamstone", "Sunvein", "Skyshale", "Cloudgrit"}
+    for _, itemName in ipairs(defaultItems) do
+        if not string.lower(itemName):find("pickaxe") then
+            table.insert(itemSettings, {name = itemName, enabled = true})
+        end
+    end
+end
+
+-----------------------------------------------------------------
+-- 1. TOMBOL SHOW / HIDE (Glassmorphism Style)
+-----------------------------------------------------------------
+local toggleBtn = Instance.new("TextButton")
+toggleBtn.Name = "ToggleShowHide"
+toggleBtn.Parent = screenGui
+toggleBtn.BackgroundColor3 = Color3.fromRGB(20, 20, 30)
+toggleBtn.BackgroundTransparency = 0.35
+toggleBtn.Position = UDim2.new(0.02, 0, 0.1, 0)
+toggleBtn.Size = UDim2.new(0, 42, 0, 42)
+toggleBtn.Font = Enum.Font.GothamBold
+toggleBtn.Text = "SELL"
+toggleBtn.TextColor3 = Color3.fromRGB(240, 245, 255)
+toggleBtn.TextSize = 11
+toggleBtn.BorderSizePixel = 0
+toggleBtn.Active = true
+
+local toggleCorner = Instance.new("UICorner")
+toggleCorner.CornerRadius = UDim.new(0, 10)
+toggleCorner.Parent = toggleBtn
+
+local toggleStroke = Instance.new("UIStroke")
+toggleStroke.Color = Color3.fromRGB(255, 255, 255)
+toggleStroke.Transparency = 0.6
+toggleStroke.Thickness = 1.2
+toggleStroke.Parent = toggleBtn
+
+-- Fitur Drag untuk Tombol Toggle
+local draggingToggle, dragStartToggle, startPosToggle
+local hasDragged = false
+
+toggleBtn.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        draggingToggle = true
+        hasDragged = false
+        dragStartToggle = input.Position
+        startPosToggle = toggleBtn.Position
+        
+        input.Changed:Connect(function()
+            if input.UserInputState == Enum.UserInputState.End then
+                draggingToggle = false
+            end
+        end)
+    end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+    if draggingToggle and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+        local delta = input.Position - dragStartToggle
+        if math.abs(delta.X) > 5 or math.abs(delta.Y) > 5 then
+            hasDragged = true
+        end
+        toggleBtn.Position = UDim2.new(
+            startPosToggle.X.Scale, 
+            startPosToggle.X.Offset + delta.X, 
+            startPosToggle.Y.Scale, 
+            startPosToggle.Y.Offset + delta.Y
+        )
+    end
+end)
+
+-----------------------------------------------------------------
+-- 2. MAIN FRAME (Panel Utama - Tema Glassmorphic & Kanan Atas)
+-----------------------------------------------------------------
+local mainFrame = Instance.new("Frame")
+mainFrame.Name = "MainFrame"
+mainFrame.Parent = screenGui
+mainFrame.BackgroundColor3 = Color3.fromRGB(15, 15, 22)
+mainFrame.BackgroundTransparency = 0.25
+mainFrame.AnchorPoint = Vector2.new(1, 0)
+mainFrame.Position = UDim2.new(1, -15, 0, 15)
+mainFrame.Size = UDim2.new(0, 220, 0, 150)
+mainFrame.BorderSizePixel = 0
+mainFrame.Active = true
+mainFrame.Draggable = true
+
+local mainCorner = Instance.new("UICorner")
+mainCorner.CornerRadius = UDim.new(0, 12)
+mainCorner.Parent = mainFrame
+
+local mainStroke = Instance.new("UIStroke")
+mainStroke.Color = Color3.fromRGB(255, 255, 255)
+mainStroke.Transparency = 0.5
+mainStroke.Thickness = 1.5
+mainStroke.Parent = mainFrame
+
+-- Judul
+local titleLabel = Instance.new("TextLabel")
+titleLabel.Parent = mainFrame
+titleLabel.BackgroundTransparency = 1
+titleLabel.Position = UDim2.new(0, 12, 0, 8)
+titleLabel.Size = UDim2.new(1, -45, 0, 20)
+titleLabel.Font = Enum.Font.GothamBold
+titleLabel.Text = "Auto Farm"
+titleLabel.TextColor3 = Color3.fromRGB(240, 245, 255)
+titleLabel.TextSize = 13
+titleLabel.TextXAlignment = Enum.TextXAlignment.Left
+
+-- Tombol Close (X)
+local closeBtn = Instance.new("TextButton")
+closeBtn.Parent = mainFrame
+closeBtn.BackgroundColor3 = Color3.fromRGB(230, 50, 50)
+closeBtn.BackgroundTransparency = 0.3
+closeBtn.Position = UDim2.new(1, -28, 0, 8)
+closeBtn.Size = UDim2.new(0, 20, 0, 20)
+closeBtn.Font = Enum.Font.GothamBold
+closeBtn.Text = "X"
+closeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+closeBtn.TextSize = 10
+
+local closeCorner = Instance.new("UICorner")
+closeCorner.CornerRadius = UDim.new(0, 6)
+closeCorner.Parent = closeBtn
+
+local closeStroke = Instance.new("UIStroke")
+closeStroke.Color = Color3.fromRGB(255, 255, 255)
+closeStroke.Transparency = 0.6
+closeStroke.Thickness = 1
+closeStroke.Parent = closeBtn
+
+-- Tombol 1: Auto Claim (Otomatis ON saat Execute)
+local autoClaimBtn = Instance.new("TextButton")
+autoClaimBtn.Parent = mainFrame
+autoClaimBtn.BackgroundColor3 = Color3.fromRGB(30, 30, 45)
+autoClaimBtn.BackgroundTransparency = 0.4
+autoClaimBtn.Position = UDim2.new(0, 10, 0, 36)
+autoClaimBtn.Size = UDim2.new(1, -20, 0, 28)
+autoClaimBtn.Font = Enum.Font.GothamBold
+autoClaimBtn.Text = "Auto Claim: ON"
+autoClaimBtn.TextColor3 = Color3.fromRGB(100, 255, 150)
+autoClaimBtn.TextSize = 11
+
+local autoClaimCorner = Instance.new("UICorner")
+autoClaimCorner.CornerRadius = UDim.new(0, 6)
+autoClaimCorner.Parent = autoClaimBtn
+
+local autoClaimStroke = Instance.new("UIStroke")
+autoClaimStroke.Color = Color3.fromRGB(255, 255, 255)
+autoClaimStroke.Transparency = 0.7
+autoClaimStroke.Thickness = 1
+autoClaimStroke.Parent = autoClaimBtn
+
+-- Tombol Dropdown: Pengaturan Item Sale (Tersembunyi Awalnya)
+local dropdownToggleBtn = Instance.new("TextButton")
+dropdownToggleBtn.Parent = mainFrame
+dropdownToggleBtn.BackgroundColor3 = Color3.fromRGB(30, 30, 45)
+dropdownToggleBtn.BackgroundTransparency = 0.4
+dropdownToggleBtn.Position = UDim2.new(0, 10, 0, 70)
+dropdownToggleBtn.Size = UDim2.new(1, -20, 0, 26)
+dropdownToggleBtn.Font = Enum.Font.GothamBold
+dropdownToggleBtn.Text = "▼ Pengaturan Item Sale"
+dropdownToggleBtn.TextColor3 = Color3.fromRGB(220, 230, 245)
+dropdownToggleBtn.TextSize = 10
+
+local dropdownCorner = Instance.new("UICorner")
+dropdownCorner.CornerRadius = UDim.new(0, 6)
+dropdownCorner.Parent = dropdownToggleBtn
+
+local dropdownStroke = Instance.new("UIStroke")
+dropdownStroke.Color = Color3.fromRGB(255, 255, 255)
+dropdownStroke.Transparency = 0.7
+dropdownStroke.Thickness = 1
+dropdownStroke.Parent = dropdownToggleBtn
+
+-- Container Dropdown (Search Box + Select All Btn + Scrolling List)
+local dropdownContainer = Instance.new("Frame")
+dropdownContainer.Parent = mainFrame
+dropdownContainer.BackgroundTransparency = 1
+dropdownContainer.Position = UDim2.new(0, 10, 0, 100)
+dropdownContainer.Size = UDim2.new(1, -20, 0, 136)
+dropdownContainer.Visible = false
+
+-- Search Box untuk Item
+local searchBox = Instance.new("TextBox")
+searchBox.Parent = dropdownContainer
+searchBox.BackgroundColor3 = Color3.fromRGB(20, 20, 30)
+searchBox.BackgroundTransparency = 0.5
+searchBox.Position = UDim2.new(0, 0, 0, 0)
+searchBox.Size = UDim2.new(1, 0, 0, 24)
+searchBox.Font = Enum.Font.Gotham
+searchBox.PlaceholderText = "Cari item..."
+searchBox.PlaceholderColor3 = Color3.fromRGB(150, 160, 180)
+searchBox.Text = ""
+searchBox.TextColor3 = Color3.fromRGB(240, 245, 255)
+searchBox.TextSize = 10
+searchBox.ClearTextOnFocus = false
+
+local searchCorner = Instance.new("UICorner")
+searchCorner.CornerRadius = UDim.new(0, 5)
+searchCorner.Parent = searchBox
+
+local searchStroke = Instance.new("UIStroke")
+searchStroke.Color = Color3.fromRGB(255, 255, 255)
+searchStroke.Transparency = 0.75
+searchStroke.Thickness = 1
+searchStroke.Parent = searchBox
+
+-- Tombol Select All / Deselect All
+local selectAllBtn = Instance.new("TextButton")
+selectAllBtn.Parent = dropdownContainer
+selectAllBtn.BackgroundColor3 = Color3.fromRGB(35, 35, 50)
+selectAllBtn.BackgroundTransparency = 0.4
+selectAllBtn.Position = UDim2.new(0, 0, 0, 28)
+selectAllBtn.Size = UDim2.new(1, 0, 0, 22)
+selectAllBtn.Font = Enum.Font.GothamBold
+selectAllBtn.Text = "Select All / Deselect All"
+selectAllBtn.TextColor3 = Color3.fromRGB(220, 230, 245)
+selectAllBtn.TextSize = 10
+
+local selectAllCorner = Instance.new("UICorner")
+selectAllCorner.CornerRadius = UDim.new(0, 5)
+selectAllCorner.Parent = selectAllBtn
+
+local selectAllStroke = Instance.new("UIStroke")
+selectAllStroke.Color = Color3.fromRGB(255, 255, 255)
+selectAllStroke.Transparency = 0.75
+selectAllStroke.Thickness = 1
+selectAllStroke.Parent = selectAllBtn
+
+-- ScrollingFrame untuk Daftar Item Sale
+local scrollFrame = Instance.new("ScrollingFrame")
+scrollFrame.Parent = dropdownContainer
+scrollFrame.BackgroundColor3 = Color3.fromRGB(12, 12, 18)
+scrollFrame.BackgroundTransparency = 0.4
+scrollFrame.Position = UDim2.new(0, 0, 0, 54)
+scrollFrame.Size = UDim2.new(1, 0, 1, -54)
+scrollFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
+scrollFrame.ScrollBarThickness = 3
+scrollFrame.BorderSizePixel = 0
+
+local scrollCorner = Instance.new("UICorner")
+scrollCorner.CornerRadius = UDim.new(0, 6)
+scrollCorner.Parent = scrollFrame
+
+local scrollStroke = Instance.new("UIStroke")
+scrollStroke.Color = Color3.fromRGB(255, 255, 255)
+scrollStroke.Transparency = 0.8
+scrollStroke.Thickness = 1
+scrollStroke.Parent = scrollFrame
+
+local uiListLayout = Instance.new("UIListLayout")
+uiListLayout.Parent = scrollFrame
+uiListLayout.SortOrder = Enum.SortOrder.LayoutOrder
+uiListLayout.Padding = UDim.new(0, 3)
+
+-- Tombol 2: Sale Items
+local saleBtn = Instance.new("TextButton")
+saleBtn.Parent = mainFrame
+saleBtn.BackgroundColor3 = Color3.fromRGB(40, 150, 70)
+saleBtn.BackgroundTransparency = 0.3
+saleBtn.Position = UDim2.new(0, 10, 0, 102)
+saleBtn.Size = UDim2.new(1, -20, 0, 30)
+saleBtn.Font = Enum.Font.GothamBold
+saleBtn.Text = "Sale Selected Items"
+saleBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+saleBtn.TextSize = 11
+
+local saleCorner = Instance.new("UICorner")
+saleCorner.CornerRadius = UDim.new(0, 6)
+saleCorner.Parent = saleBtn
+
+local saleStroke = Instance.new("UIStroke")
+saleStroke.Color = Color3.fromRGB(255, 255, 255)
+saleStroke.Transparency = 0.6
+saleStroke.Thickness = 1
+saleStroke.Parent = saleBtn
+
+-- Resize Handle (Pojok Kanan Bawah)
+local resizeBtn = Instance.new("TextButton")
+resizeBtn.Parent = mainFrame
+resizeBtn.BackgroundColor3 = Color3.fromRGB(120, 120, 140)
+resizeBtn.BackgroundTransparency = 0.3
+resizeBtn.Position = UDim2.new(1, -8, 1, -8)
+resizeBtn.Size = UDim2.new(0, 8, 0, 8)
+resizeBtn.Text = ""
+resizeBtn.BorderSizePixel = 0
+
+local resizeCorner = Instance.new("UICorner")
+resizeCorner.CornerRadius = UDim.new(0, 2)
+resizeCorner.Parent = resizeBtn
+
+local draggingResize, resizeStart, startSize
+
+resizeBtn.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        draggingResize = true
+        resizeStart = input.Position
+        startSize = mainFrame.AbsoluteSize
+        
+        input.Changed:Connect(function()
+            if input.UserInputState == Enum.UserInputState.End then
+                draggingResize = false
+            end
+        end)
+    end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+    if draggingResize and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+        local delta = input.Position - resizeStart
+        local newWidth = math.clamp(startSize.X + delta.X, 200, 400)
+        local newHeight = math.clamp(startSize.Y + delta.Y, 150, 380)
+        mainFrame.Size = UDim2.new(0, newWidth, 0, newHeight)
+    end
+end)
+
+-----------------------------------------------------------------
+-- 3. FUNGSI RENDER LIST ITEM & FILTER SEARCH
+-----------------------------------------------------------------
+local itemFrames = {}
+
+local function updateCanvasSize()
+    scrollFrame.CanvasSize = UDim2.new(0, 0, 0, uiListLayout.AbsoluteContentSize.Y + 3)
+end
+
+uiListLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(updateCanvasSize)
+
+for _, itemData in ipairs(itemSettings) do
+    local itemFrame = Instance.new("Frame")
+    itemFrame.Parent = scrollFrame
+    itemFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 30)
+    itemFrame.BackgroundTransparency = 0.5
+    itemFrame.Size = UDim2.new(1, -3, 0, 24)
+    itemFrame.BorderSizePixel = 0
+
+    local itemCorner = Instance.new("UICorner")
+    itemCorner.CornerRadius = UDim.new(0, 4)
+    itemCorner.Parent = itemFrame
+
+    local checkBtn = Instance.new("TextButton")
+    checkBtn.Parent = itemFrame
+    checkBtn.BackgroundColor3 = itemData.enabled and Color3.fromRGB(40, 150, 70) or Color3.fromRGB(40, 40, 55)
+    checkBtn.BackgroundTransparency = 0.3
+    checkBtn.Position = UDim2.new(0, 5, 0.5, -8)
+    checkBtn.Size = UDim2.new(0, 16, 0, 16)
+    checkBtn.Font = Enum.Font.GothamBold
+    checkBtn.Text = itemData.enabled and "✓" or ""
+    checkBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    checkBtn.TextSize = 10
+
+    local checkCorner = Instance.new("UICorner")
+    checkCorner.CornerRadius = UDim.new(0, 4)
+    checkCorner.Parent = checkBtn
+
+    local nameLabel = Instance.new("TextLabel")
+    nameLabel.Parent = itemFrame
+    nameLabel.BackgroundTransparency = 1
+    nameLabel.Position = UDim2.new(0, 26, 0, 0)
+    nameLabel.Size = UDim2.new(1, -30, 1, 0)
+    nameLabel.Font = Enum.Font.Gotham
+    nameLabel.Text = itemData.name
+    nameLabel.TextColor3 = Color3.fromRGB(230, 235, 245)
+    nameLabel.TextSize = 10
+    nameLabel.TextXAlignment = Enum.TextXAlignment.Left
+
+    checkBtn.MouseButton1Click:Connect(function()
+        itemData.enabled = not itemData.enabled
+        if itemData.enabled then
+            checkBtn.BackgroundColor3 = Color3.fromRGB(40, 150, 70)
+            checkBtn.Text = "✓"
+        else
+            checkBtn.BackgroundColor3 = Color3.fromRGB(40, 40, 55)
+            checkBtn.Text = ""
+        end
+    end)
+
+    table.insert(itemFrames, {data = itemData, frame = itemFrame, btn = checkBtn, name = string.lower(itemData.name)})
+end
+
+updateCanvasSize()
+
+-- Logika Tombol Select All / Deselect All
+local allSelected = true
+selectAllBtn.MouseButton1Click:Connect(function()
+    allSelected = not allSelected
+    for _, obj in ipairs(itemFrames) do
+        obj.data.enabled = allSelected
+        if allSelected then
+            obj.btn.BackgroundColor3 = Color3.fromRGB(40, 150, 70)
+            obj.btn.Text = "✓"
+        else
+            obj.btn.BackgroundColor3 = Color3.fromRGB(40, 40, 55)
+            obj.btn.Text = ""
+        end
+    end
+end)
+
+-- Logika Search / Filter Item
+searchBox:GetPropertyChangedSignal("Text"):Connect(function()
+    local query = string.lower(searchBox.Text)
+    for _, obj in ipairs(itemFrames) do
+        if query == "" or obj.name:find(query) then
+            obj.frame.Visible = true
+        else
+            obj.frame.Visible = false
+        end
+    end
+    updateCanvasSize()
+end)
+
+-----------------------------------------------------------------
+-- 4. LOGIKA TOMBOL DROPDOWN & FITUR UTAMA
+-----------------------------------------------------------------
+
+-- Tombol Dropdown untuk menampilkan/menyembunyikan List & Tombol Sale
+local isDropdownOpen = false
+dropdownToggleBtn.MouseButton1Click:Connect(function()
+    isDropdownOpen = not isDropdownOpen
+    dropdownContainer.Visible = isDropdownOpen
+    
+    if isDropdownOpen then
+        dropdownToggleBtn.Text = "▲ Sembunyikan Item Sale"
+        mainFrame.Size = UDim2.new(0, mainFrame.AbsoluteSize.X, 0, 275)
+        saleBtn.Position = UDim2.new(0, 10, 0, 240)
+    else
+        dropdownToggleBtn.Text = "▼ Pengaturan Item Sale"
+        mainFrame.Size = UDim2.new(0, mainFrame.AbsoluteSize.X, 0, 150)
+        saleBtn.Position = UDim2.new(0, 10, 0, 102)
+    end
+end)
+
+-- Tombol Buka / Tutup UI utama melalui Toggle "SELL"
+toggleBtn.MouseButton1Click:Connect(function()
+    if not hasDragged then
+        mainFrame.Visible = not mainFrame.Visible
+    end
+end)
+
+-- Tombol Close (X) untuk menghentikan proses dan menghapus total UI dari layar
+closeBtn.MouseButton1Click:Connect(function()
+    autoClaimActive = false
+    screenGui:Destroy()
+end)
+
+-- Otomatis Jalankan Auto Claim Saat Execute
+autoClaimThread = task.spawn(function()
+    while autoClaimActive do
+        local gamestateEvent = ReplicatedStorage:FindFirstChild("Remotes") and ReplicatedStorage.Remotes:FindFirstChild("GamestateEvent")
+        if gamestateEvent then
+            pcall(function()
+                gamestateEvent:FireServer("MineTakeChest")
+                task.wait(0.5)
+                gamestateEvent:FireServer("MineEquipBest")
+            end)
+        end
+        
+        for i = 1, 10 do
+            if not autoClaimActive then break end
+            task.wait(1)
+        end
+    end
+end)
+
+-- Tombol Manual Toggle Auto Claim
+autoClaimBtn.MouseButton1Click:Connect(function()
+    autoClaimActive = not autoClaimActive
+    
+    if autoClaimActive then
+        autoClaimBtn.Text = "Auto Claim: ON"
+        autoClaimBtn.TextColor3 = Color3.fromRGB(100, 255, 150)
+        
+        autoClaimThread = task.spawn(function()
+            while autoClaimActive do
+                local gamestateEvent = ReplicatedStorage:FindFirstChild("Remotes") and ReplicatedStorage.Remotes:FindFirstChild("GamestateEvent")
+                if gamestateEvent then
+                    pcall(function()
+                        gamestateEvent:FireServer("MineTakeChest")
+                        task.wait(0.5)
+                        gamestateEvent:FireServer("MineEquipBest")
+                    end)
+                end
+                
+                for i = 1, 10 do
+                    if not autoClaimActive then break end
+                    task.wait(1)
+                end
+            end
+        end)
+    else
+        autoClaimActive = false
+        autoClaimBtn.Text = "Auto Claim: OFF"
+        autoClaimBtn.TextColor3 = Color3.fromRGB(255, 100, 100)
+    end
+end)
+
+-- Logika Tombol Sale Items (Simpan Posisi -> TP Hub -> Jual -> Kembali ke Posisi Awal)
+saleBtn.MouseButton1Click:Connect(function()
+    local gamestateEvent = ReplicatedStorage:FindFirstChild("Remotes") and ReplicatedStorage.Remotes:FindFirstChild("GamestateEvent")
+    if not gamestateEvent then return end
+    
+    local char = player.Character
+    if not char or not char:FindFirstChild("HumanoidRootPart") then return end
+    
+    local originalPosition = char.HumanoidRootPart.CFrame
+    
+    local selectedItemsToSell = {}
+    for _, item in ipairs(itemSettings) do
+        if item.enabled then
+            table.insert(selectedItemsToSell, item.name)
+        end
+    end
+    
+    if #selectedItemsToSell == 0 then
+        return
+    end
+    
+    pcall(function()
+        gamestateEvent:FireServer("MineTeleport", "Hub")
+        task.wait(0.6)
+        
+        gamestateEvent:FireServer("MineSellItems", selectedItemsToSell)
+        task.wait(0.6)
+        
+        if player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
+            player.Character.HumanoidRootPart.CFrame = originalPosition
+        end
+    end)
+end)
