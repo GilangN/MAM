@@ -5,6 +5,19 @@ if game.PlaceId ~= TARGET_PLACE_ID then
     return -- Berhenti mengeksekusi jika dijalankan di luar game ini
 end
 
+-- Fitur Auto Re-execute khusus untuk map ini saat rejoin / teleport menggunakan URL GitHub Anda
+local queueOnTeleport = syn and syn.queue_on_teleport or queue_on_teleport or fluxus and fluxus.queue_on_teleport
+if queueOnTeleport then
+    pcall(function()
+        queueOnTeleport([[
+            if game.PlaceId == 79389059854988 then
+                task.wait(2)
+                loadstring(game:HttpGet("https://raw.githubusercontent.com/GilangN/MAM/refs/heads/main/MAM"))()
+            end
+        ]])
+    end)
+end
+
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local UserInputService = game:GetService("UserInputService")
